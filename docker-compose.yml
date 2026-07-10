@@ -1,0 +1,114 @@
+version: "3.9"
+
+# =============================================================================
+# Serenity v2 — Production Docker Compose
+#
+# Fixes applied:
+#   FIX 2.1  — ChromaDB now has a named volume so data survives restarts
+#   FIX 1.2-B — ChromaDB on internal network only, never exposed publicly
+#   FIX 1.2-E — nginx terminates TLS; uvicorn never faces the internet directly
+#   FIX 1.2-D — ALLOWED_ORIGINS set to your actual domain (edit below)
+# =============================================================================
+
+services:
+
+  # ── FastAPI backend ─────────────────────────────────────────────────────────
+  api:
+    build: ./backend
+    container_name: serenity_api
+    restart: unless-stopped
+    environment:
+      # App
+      APP_ENV:                production
+      APP_NAME:               Serenity
+      DEBUG:                  "false"
+
+      # Supabase
+      SUPABASE_URL:           ${SUPABASE_URL}
+      SUPABASE_ANON_KEY:      ${SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+
+      # OpenAI
+      OPENAI_API_KEY:         ${OPENAI_API_KEY}
+      OPENAI_MODEL:           gpt-4o
+
+      # Journal encryption — generate with:
+      # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      JOURNAL_ENCRYPTION_KEY: ${JOURNAL_ENCRYPTION_KEY}
+
+      # CORS — set to your Flutter web domain
+      ALLOWED_ORIGINS:        ${ALLOWED_ORIGINS:-https://your-serenity-domain.com}
+
+      # ChromaDB — embedded persistent mode (safest, no network exposure)
+      CHROMA_MODE:            persistent
+      CHROMA_PERSIST_PATH:    /data/chroma
+
+      # Email
+      SMTP_HOST:              ${SMTP_HOST}
+      SMTP_PORT:              ${SMTP_PORT:-587}
+      SMTP_USERNAME:          ${SMTP_USERNAME}
+      SMTP_PASSWORD:          ${SMTP_PASSWORD}
+      EMAIL_FROM_ADDRESS:     ${EMAIL_FROM_ADDRESS}
+      EMAIL_FROM_NAME:        Serenity Recovery
+
+    volumes:
+      # FIX 2.1: persistent ChromaDB data — survives container restarts
+      - chroma_data:/data/chroma
+    expose:
+      - "8080"    # only reachable by nginx on the internal network, NOT the internet
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+
+  # ── nginx TLS reverse proxy ─────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: serenity_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"     # redirects to HTTPS
+      - "443:443"   # TLS termination
+    volumes:
+      - ./infrastructure/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Mount your TLS certificates here.
+      # Use Certbot / Let's Encrypt:
+      #   certbot certonly --standalone -d your-serenity-domain.com
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - api
+    networks:
+      - internal
+      - external
+
+
+# =============================================================================
+# Networks
+# internal: api + nginx only — ChromaDB (embedded) never has a network port
+# external: nginx faces the internet
+# =============================================================================
+networks:
+  internal:
+    driver: bridge
+    internal: true    # no direct internet access for api container
+  external:
+    driver: bridge
+
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  chroma_data:
+    driver: local
+    # To back up: docker run --rm -v serenity_chroma_data:/data -v $(pwd):/backup
+    #             alpine tar czf /backup/chroma_backup.tar.gz /data

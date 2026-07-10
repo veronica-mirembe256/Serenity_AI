@@ -1,0 +1,36 @@
+# Miscellaneous
+*.log
+*.pyc
+.DS_Store
+.history
+__pycache__/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# Flutter / Dart
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/build/
+**/coverage/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+
+# Android Studio artifacts
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+
+# --- SECRETS & VIRTUAL ENVS (CRITICAL) ---
+backend/.env
+backend/*.env
+venv/
+
+.venv/
+backend/env/
+backend/__pycache__/
