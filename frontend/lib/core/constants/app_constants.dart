@@ -2,7 +2,7 @@ class AppConstants {
   // FIX: change this to your real domain before deploying.
   // In dev: 'http://localhost:8080'
   // In production: 'https://your-serenity-domain.com'
-  static const String baseUrl = 'http://localhost:8080';
+  static const String baseUrl = 'https://serenity-ai-upqc.onrender.com/';
 
   // Secure storage keys
   static const String tokenKey      = 'serenity_token';
