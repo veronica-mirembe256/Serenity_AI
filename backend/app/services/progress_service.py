@@ -20,7 +20,9 @@ def _safe_data(res):
 
 async def get_user_stats(user_id: str) -> dict:
     """Return progress stats, weekly summary, and badges for a user."""
-    supabase = get_supabase()
+    # FIX: use service_role client — same RLS-blocked read pattern as
+    # app/routes/progress.py and app/services/journal_service.py
+    supabase = get_supabase(service_role=True)
 
     # ── Progress ───────────────────────────────────────────────────────────
     try:
@@ -82,7 +84,7 @@ async def get_user_stats(user_id: str) -> dict:
 
         insight_data = insight_res.data if insight_res and hasattr(insight_res, "data") else []
         latest_insight = insight_data[0] if insight_data else {}
-       
+
 
     except Exception as e:
         logger.warning("Insight fetch failed", extra={"error": str(e)})

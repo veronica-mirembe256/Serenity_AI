@@ -30,7 +30,11 @@ async def run_inactivity_scan(
     Paginated inactivity scan.
     Returns a summary: { scanned, reminders_sent, escalations_sent, errors }
     """
-    from app.services.email_service import send_reminder_email, send_escalation_email
+    # FIX: these names didn't match what email_service.py actually exports
+    # (send_inactivity_reminder / send_escalation_alert), so this import was
+    # raising ImportError and crashing the entire scan before it processed
+    # a single user.
+    from app.services.email_service import send_inactivity_reminder, send_escalation_alert
 
     supabase = get_supabase(service_role=True)
     today    = date.today()
@@ -42,7 +46,7 @@ async def run_inactivity_scan(
         try:
             res = (
                 supabase.table("user_progress")
-                .select("user_id, last_entry_date")
+                .select("user_id, last_entry_date, current_streak")
                 .not_.is_("last_entry_date", "null")   # skip users who never journaled
                 .range(offset, offset + _BATCH_SIZE - 1)
                 .execute()
@@ -97,15 +101,18 @@ async def run_inactivity_scan(
                 )
                 profile = profile_res.data or {}
 
-                # Fetch email from auth — user_profiles stores display_name only
-                auth_res = (
-                    supabase.table("user_profiles")
-                    .select("email")
-                    .eq("id", user_id)
-                    .maybe_single()
-                    .execute()
-                )
-                user_email = (auth_res.data or {}).get("email", "")
+                # FIX: user_profiles has no `email` column — the previous
+                # query always returned empty, so reminder emails silently
+                # never sent to anyone. Email lives in Supabase Auth, so we
+                # fetch it via the Admin API (requires the service_role
+                # client, which `supabase` already is here).
+                user_email = ""
+                try:
+                    auth_user = supabase.auth.admin.get_user_by_id(user_id)
+                    user_email = getattr(getattr(auth_user, "user", None), "email", "") or ""
+                except Exception as exc:
+                    logger.warning("Auth email lookup failed for user",
+                        extra={"user_id": user_id, "error": str(exc)})
 
             except Exception as exc:
                 logger.warning("Consent/profile fetch failed for user",
@@ -118,10 +125,11 @@ async def run_inactivity_scan(
             # ── Reminder (1+ days inactive) ───────────────────────────────────
             if days_inactive >= reminder_days and consent.get("email_reminders") and user_email:
                 try:
-                    await send_reminder_email(
-                        to_email=user_email,
+                    await send_inactivity_reminder(
+                        to_address=user_email,
                         user_name=name,
                         days_inactive=days_inactive,
+                        streak=row.get("current_streak", 0),
                     )
                     summary["reminders_sent"] += 1
                 except Exception as exc:
@@ -134,13 +142,33 @@ async def run_inactivity_scan(
                 therapist_email = profile.get("therapist_email")
                 rehab_email     = profile.get("rehab_contact_email")
 
+                # Latest risk level gives the recipient real context, and is
+                # what the email_escalation.j2 template expects.
+                risk_level = "unknown"
+                try:
+                    risk_res = (
+                        supabase.table("ai_insights")
+                        .select("relapse_risk_level")
+                        .eq("user_id", user_id)
+                        .order("created_at", desc=True)
+                        .limit(1)
+                        .maybe_single()
+                        .execute()
+                    )
+                    if risk_res and risk_res.data:
+                        risk_level = risk_res.data.get("relapse_risk_level", "unknown")
+                except Exception as exc:
+                    logger.warning("Risk level lookup failed for escalation",
+                        extra={"user_id": user_id, "error": str(exc)})
+
                 if consent.get("therapist_escalation") and therapist_email:
                     try:
-                        await send_escalation_email(
-                            to_email=therapist_email,
+                        await send_escalation_alert(
+                            therapist_email=therapist_email,
                             user_name=name,
+                            therapist_name=None,
                             days_inactive=days_inactive,
-                            recipient_type="therapist",
+                            risk_level=risk_level,
                         )
                         summary["escalations_sent"] += 1
                     except Exception as exc:
@@ -150,11 +178,12 @@ async def run_inactivity_scan(
 
                 if consent.get("rehab_escalation") and rehab_email:
                     try:
-                        await send_escalation_email(
-                            to_email=rehab_email,
+                        await send_escalation_alert(
+                            therapist_email=rehab_email,
                             user_name=name,
+                            therapist_name=None,
                             days_inactive=days_inactive,
-                            recipient_type="rehab",
+                            risk_level=risk_level,
                         )
                         summary["escalations_sent"] += 1
                     except Exception as exc:

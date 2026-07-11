@@ -12,47 +12,78 @@ class ProgressPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final stats = ref.watch(statsProvider);
-    final chart = ref.watch(chartProvider);   // FIX: real data
+    // Use a refreshable provider
+    final statsAsync = ref.watch(statsProvider);
+    final chartAsync = ref.watch(chartProvider);
+    final t = Theme.of(context).textTheme;
 
-    return stats.when(
+    return statsAsync.when(
       loading: () => PageScroll(children: [
-        const WShimmer(h: 150), const SizedBox(height: 20),
+        const WShimmer(h: 150),
+        const SizedBox(height: 20),
         Row(children: List.generate(4, (i) => Expanded(
             child: Padding(padding: EdgeInsets.only(right: i < 3 ? 12 : 0),
                 child: const WShimmer(h: 100))))),
-        const SizedBox(height: 20), const WShimmer(h: 260),
+        const SizedBox(height: 20),
+        const WShimmer(h: 260),
       ]),
-      error: (_, __) => const Center(child: Text('Could not load progress.')),
-      data: (s) => PageScroll(children: [
-        _StreakHero(stats: s),
-        const SizedBox(height: 22),
-        _StatRow(stats: s),
-        const SizedBox(height: 22),
+      error: (err, stack) {
+        print('❌ [PROGRESS] Error loading stats: $err');
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Could not load progress.', style: t.bodyMedium),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () {
+                  print('🔄 [PROGRESS] Retry loading');
+                  ref.invalidate(statsProvider);
+                  ref.invalidate(chartProvider);
+                },
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        );
+      },
+      data: (s) {
+        print('📊 [PROGRESS] Stats loaded: streak=${s.currentStreak}, entries=${s.totalEntries}');
 
-        // Charts row
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // FIX: mood chart now uses real data from chartProvider
-          Expanded(flex: 3, child: chart.when(
-            loading: () => const WShimmer(h: 260),
-            error:   (_, __) => const WShimmer(h: 260),
-            data:    (points) => _MoodChart(dataPoints: points),
-          )),
-          const SizedBox(width: 16),
-          // FIX: weekly bar chart also uses real data
-          Expanded(flex: 2, child: chart.when(
-            loading: () => const WShimmer(h: 260),
-            error:   (_, __) => const WShimmer(h: 260),
-            data:    (points) => _WeeklyBar(
-                dataPoints: points, stats: s),
-          )),
-        ]),
-
-        if (s.badges.isNotEmpty) ...[
+        return PageScroll(children: [
+          _StreakHero(stats: s),
           const SizedBox(height: 22),
-          _Badges(badges: s.badges),
-        ],
-      ]),
+          _StatRow(stats: s),
+          const SizedBox(height: 22),
+
+          // Charts row
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(flex: 3, child: chartAsync.when(
+              loading: () => const WShimmer(h: 260),
+              error: (err, stack) {
+                print('❌ [PROGRESS] Error loading chart: $err');
+                return const WShimmer(h: 260);
+              },
+              data: (points) {
+                print('📊 [PROGRESS] Chart data points: ${points.length}');
+                return _MoodChart(dataPoints: points);
+              },
+            )),
+            const SizedBox(width: 16),
+            Expanded(flex: 2, child: chartAsync.when(
+              loading: () => const WShimmer(h: 260),
+              error: (err, stack) => const WShimmer(h: 260),
+              data: (points) => _WeeklyBar(
+                  dataPoints: points, stats: s),
+            )),
+          ]),
+
+          if (s.badges.isNotEmpty) ...[
+            const SizedBox(height: 22),
+            _Badges(badges: s.badges),
+          ],
+        ]);
+      },
     );
   }
 }
@@ -147,7 +178,7 @@ class _StatRow extends StatelessWidget {
   }
 }
 
-// ── Mood line chart — REAL DATA ───────────────────────────────────────────────
+// ── Mood line chart ───────────────────────────────────────────────────────────────
 
 class _MoodChart extends StatelessWidget {
   final List<ChartDataPoint> dataPoints;
@@ -157,7 +188,6 @@ class _MoodChart extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
 
-    // Build spots from real data — filter to last 7 days with mood data
     final moodPoints = dataPoints
         .where((p) => p.avgMood != null)
         .toList()
@@ -246,7 +276,7 @@ class _MoodChart extends StatelessWidget {
   }
 }
 
-// ── Weekly bar chart — REAL DATA ──────────────────────────────────────────────
+// ── Weekly bar chart ──────────────────────────────────────────────────────────────
 
 class _WeeklyBar extends StatelessWidget {
   final List<ChartDataPoint> dataPoints;
@@ -257,7 +287,6 @@ class _WeeklyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
 
-    // Group by ISO week — last 4 weeks
     final now   = DateTime.now();
     final weeks = List.generate(4, (i) {
       final weekStart = now.subtract(Duration(days: now.weekday - 1 + (3 - i) * 7));

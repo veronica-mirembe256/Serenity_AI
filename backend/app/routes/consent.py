@@ -13,8 +13,10 @@ async def save_consent(
     body: ConsentRequest,
     user_id: str = Depends(get_current_user),        # FIX: authenticated user only
 ):
-    # FIX: actually upsert consent flags to user_consents table
-    supabase = get_supabase()
+    # FIX: use service_role client — anon client's write was silently/loudly
+    # blocked by RLS WITH CHECK (auth.uid() is null for the anon client, so
+    # it never matches user_id). Same root-cause pattern as journal/progress.
+    supabase = get_supabase(service_role=True)
     supabase.table("user_consents").upsert({
         "user_id": user_id,
         **body.model_dump(),

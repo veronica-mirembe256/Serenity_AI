@@ -103,6 +103,27 @@ async def generate_daily_message(user_id: str) -> dict:
 
     streak = progress.get("current_streak", 0)
 
+    # ── Load last entry summary (for prompt context) ────────────────────────────
+    # FIX: daily_message.j2 references last_entry_summary but it was never
+    # passed in, causing "'last_entry_summary' is undefined" and silently
+    # falling back to the rule-based message every time.
+    last_entry_summary = ""
+    try:
+        res = (
+            supabase.table("ai_insights")
+            .select("pattern_insight,detected_emotion,created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .maybe_single()
+            .execute()
+        )
+        latest_insight = _safe(res)
+        if latest_insight:
+            last_entry_summary = latest_insight.get("pattern_insight") or ""
+    except Exception as e:
+        logger.warning("Last entry summary load failed", extra={"error": str(e)})
+
     # ── Try LLM-generated message ─────────────────────────────────────────────
     final_message = None
     try:
@@ -117,6 +138,7 @@ async def generate_daily_message(user_id: str) -> dict:
             challenges=challenges,
             goals=goals,
             streak=streak,
+            last_entry_summary=last_entry_summary,
         )
         llm      = ChatOpenAI(
             model=settings.openai_model,

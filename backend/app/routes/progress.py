@@ -28,7 +28,9 @@ def _safe(res) -> dict:
 async def get_chart_data(
     user_id: str = Depends(get_current_user),
 ):
-    supabase = get_supabase()
+    # FIX: use service_role client — regular client was silently blocked by
+    # RLS SELECT policy on v_daily_progress, always returning 0 rows
+    supabase = get_supabase(service_role=True)
     try:
         res = (
             supabase.table("v_daily_progress")
@@ -54,7 +56,10 @@ async def get_chart_data(
 async def get_stats(
     user_id: str = Depends(get_current_user),
 ):
-    supabase = get_supabase()
+    # FIX: use service_role client — regular client was silently blocked by
+    # RLS SELECT policy on user_progress / ai_insights, always returning
+    # 0/empty despite successful writes from the service-role client
+    supabase = get_supabase(service_role=True)
     try:
         progress_res = (
             supabase.table("user_progress")

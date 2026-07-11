@@ -191,41 +191,62 @@ class JournalNotifier extends StateNotifier<JournalState> {
   final Ref _ref;
 
   Future<bool> submit(String text, int? mood) async {
+    print('📝 [JOURNAL] Submitting entry...');
+    print('📝 [JOURNAL] Text length: ${text.length}');
+    print('📝 [JOURNAL] Mood: $mood');
+
     state = const JournalState(isSubmitting: true, streamStatusLabel: 'Sending…');
 
     try {
       await for (final event in _streaming.streamJournalEntry(
-        text:      text,
+        text: text,
         moodScore: mood,
       )) {
+        print('📡 [JOURNAL] Event: ${event.status}');
+
         switch (event.status) {
           case JournalStreamStatus.analysing:
             state = state.copyWith(streamStatusLabel: 'Analysing your entry…');
+            break;
           case JournalStreamStatus.reflecting:
             state = state.copyWith(streamStatusLabel: 'Reflecting on patterns…');
+            break;
           case JournalStreamStatus.supporting:
             state = state.copyWith(streamStatusLabel: 'Building your support plan…');
+            break;
           case JournalStreamStatus.finalising:
             state = state.copyWith(streamStatusLabel: 'Finalising insights…');
+            break;
           case JournalStreamStatus.done:
-            // FIX: invalidate providers BEFORE setting result
-            // so dashboard and insights refetch immediately
+            print('✅ [JOURNAL] Done! Result: ${event.result?.detectedEmotion}');
+            print('✅ [JOURNAL] Full result: ${event.result}');
+
+            // CRITICAL: Invalidate ALL providers before setting the result
+            print('🔄 [JOURNAL] Invalidating all providers...');
             _ref.invalidate(statsProvider);
             _ref.invalidate(insightsProvider);
             _ref.invalidate(dailyMessageProvider);
             _ref.invalidate(chartProvider);
-            // Small delay to let invalidation propagate before UI updates
-            await Future.delayed(const Duration(milliseconds: 300));
+
+            // Wait for invalidation to complete
+            await Future.delayed(const Duration(milliseconds: 800));
+
+            // Set the result
             state = JournalState(result: event.result);
+            print('✅ [JOURNAL] State updated with result');
             return true;
+
           case JournalStreamStatus.error:
+            print('❌ [JOURNAL] Error: ${event.errorMessage}');
             state = JournalState(
               error: event.errorMessage ?? 'Analysis failed. Please try again.',
             );
             return false;
         }
       }
-    } catch (e) {
+    } catch (e, stack) {
+      print('❌ [JOURNAL] Exception: $e');
+      print('❌ [JOURNAL] Stack: $stack');
       state = JournalState(error: 'Unexpected error: $e');
       return false;
     }
@@ -233,7 +254,10 @@ class JournalNotifier extends StateNotifier<JournalState> {
     return false;
   }
 
-  void clear() => state = const JournalState();
+  void clear() {
+    print('🔄 [JOURNAL] Clearing state');
+    state = const JournalState();
+  }
 }
 
 final journalProvider = StateNotifierProvider<JournalNotifier, JournalState>(
@@ -242,53 +266,85 @@ final journalProvider = StateNotifierProvider<JournalNotifier, JournalState>(
 
 // ── Remote data providers ─────────────────────────────────────────────────────
 
-// FIX: correct path is /progress/stats not /stats
 final statsProvider = FutureProvider<ProgressStats>((ref) async {
-  final res = await ref.read(apiProvider).get('/progress/stats');
-  return ProgressStats.fromJson(res.data as Map<String, dynamic>);
+  print('📊 [STATS] Fetching stats...');
+  try {
+    final res = await ref.read(apiProvider).get('/progress/stats');
+    print('📊 [STATS] Response: ${res.data}');
+    final stats = ProgressStats.fromJson(res.data as Map<String, dynamic>);
+    print('📊 [STATS] Parsed: streak=${stats.currentStreak}, entries=${stats.totalEntries}');
+    return stats;
+  } catch (e, stack) {
+    print('❌ [STATS] Error: $e');
+    print('❌ [STATS] Stack: $stack');
+    rethrow;
+  }
 });
 
 final insightsProvider = FutureProvider<List<InsightItem>>((ref) async {
-  final res  = await ref.read(apiProvider).get('/journal/insights');
-  final data = res.data as Map<String, dynamic>;
-  return (data['insights'] as List)
-      .map((i) => InsightItem.fromJson(i as Map<String, dynamic>))
-      .toList();
+  print('🔄 [INSIGHTS] Starting fetch...');
+  try {
+    final res = await ref.read(apiProvider).get('/journal/insights');
+    print('📦 [INSIGHTS] Status: ${res.statusCode}');
+    print('📦 [INSIGHTS] Data type: ${res.data.runtimeType}');
+    print('📦 [INSIGHTS] Raw response: ${res.data}');
+
+    final data = res.data as Map<String, dynamic>;
+    print('📊 [INSIGHTS] Keys: ${data.keys}');
+    print('📊 [INSIGHTS] Insights length: ${(data['insights'] as List?)?.length ?? 0}');
+
+    final insightsList = data['insights'] as List? ?? [];
+    print('📊 [INSIGHTS] List type: ${insightsList.runtimeType}');
+
+    final insights = insightsList.map((i) {
+      print('🔍 [INSIGHTS] Processing item: $i');
+      try {
+        return InsightItem.fromJson(i as Map<String, dynamic>);
+      } catch (e) {
+        print('❌ [INSIGHTS] Failed to parse item: $e');
+        rethrow;
+      }
+    }).toList();
+
+    print('✅ [INSIGHTS] Parsed ${insights.length} insights');
+    if (insights.isNotEmpty) {
+      print('✅ [INSIGHTS] First: ${insights.first.detectedEmotion}');
+      print('✅ [INSIGHTS] First ID: ${insights.first.id}');
+    }
+    return insights;
+  } catch (e, stack) {
+    print('❌ [INSIGHTS] Error: $e');
+    print('❌ [INSIGHTS] Stack: $stack');
+    rethrow;
+  }
 });
 
-// FIX: correct path is /daily-message (registered at root prefix)
 final dailyMessageProvider = FutureProvider<DailyMessage>((ref) async {
-  final res = await ref.read(apiProvider).get('/daily-message');
-  return DailyMessage.fromJson(res.data as Map<String, dynamic>);
+  print('💬 [DAILY] Fetching daily message...');
+  try {
+    final res = await ref.read(apiProvider).get('/daily-message');
+    print('💬 [DAILY] Response: ${res.data}');
+    return DailyMessage.fromJson(res.data as Map<String, dynamic>);
+  } catch (e, stack) {
+    print('❌ [DAILY] Error: $e');
+    print('❌ [DAILY] Stack: $stack');
+    rethrow;
+  }
 });
 
-// FIX: correct path is /progress/chart
 final chartProvider = FutureProvider<List<ChartDataPoint>>((ref) async {
-  final res  = await ref.read(apiProvider).get('/progress/chart');
-  final data = res.data as Map<String, dynamic>;
-  return (data['chart'] as List)
-      .map((p) => ChartDataPoint.fromJson(p as Map<String, dynamic>))
-      .toList();
-});
-
-// ── Therapist providers ───────────────────────────────────────────────────────
-
-final therapistPatientsProvider = FutureProvider<List<TherapistPatient>>((ref) async {
-  final res  = await ref.read(apiProvider).get('/therapist/patients');
-  final data = res.data as Map<String, dynamic>;
-  return (data['patients'] as List)
-      .map((p) => TherapistPatient.fromJson(p as Map<String, dynamic>))
-      .toList();
-});
-
-final patientInsightsProvider =
-    FutureProvider.family<List<PatientInsight>, String>((ref, patientId) async {
-  final res  = await ref.read(apiProvider)
-      .get('/therapist/patients/$patientId/insights');
-  final data = res.data as Map<String, dynamic>;
-  return (data['insights'] as List)
-      .map((i) => PatientInsight.fromJson(i as Map<String, dynamic>))
-      .toList();
+  print('📈 [CHART] Fetching chart data...');
+  try {
+    final res = await ref.read(apiProvider).get('/progress/chart');
+    final data = res.data as Map<String, dynamic>;
+    return (data['chart'] as List)
+        .map((p) => ChartDataPoint.fromJson(p as Map<String, dynamic>))
+        .toList();
+  } catch (e, stack) {
+    print('❌ [CHART] Error: $e');
+    print('❌ [CHART] Stack: $stack');
+    rethrow;
+  }
 });
 
 // ── Consent ───────────────────────────────────────────────────────────────────
@@ -303,27 +359,31 @@ class ConsentState {
   final bool saved;
 
   const ConsentState({
-    this.emailReminders      = false,
+    this.emailReminders = false,
     this.therapistEscalation = false,
-    this.rehabEscalation     = false,
-    this.dataAnalytics       = false,
-    this.isSaving            = false,
+    this.rehabEscalation = false,
+    this.dataAnalytics = false,
+    this.isSaving = false,
     this.error,
-    this.saved               = false,
+    this.saved = false,
   });
 
   ConsentState copyWith({
-    bool? emailReminders, bool? therapistEscalation,
-    bool? rehabEscalation, bool? dataAnalytics,
-    bool? isSaving, String? error, bool? saved,
+    bool? emailReminders,
+    bool? therapistEscalation,
+    bool? rehabEscalation,
+    bool? dataAnalytics,
+    bool? isSaving,
+    String? error,
+    bool? saved,
   }) => ConsentState(
-    emailReminders:      emailReminders      ?? this.emailReminders,
+    emailReminders: emailReminders ?? this.emailReminders,
     therapistEscalation: therapistEscalation ?? this.therapistEscalation,
-    rehabEscalation:     rehabEscalation     ?? this.rehabEscalation,
-    dataAnalytics:       dataAnalytics       ?? this.dataAnalytics,
-    isSaving:            isSaving            ?? this.isSaving,
-    error:               error,
-    saved:               saved               ?? this.saved,
+    rehabEscalation: rehabEscalation ?? this.rehabEscalation,
+    dataAnalytics: dataAnalytics ?? this.dataAnalytics,
+    isSaving: isSaving ?? this.isSaving,
+    error: error,
+    saved: saved ?? this.saved,
   );
 }
 
@@ -332,15 +392,17 @@ class ConsentNotifier extends StateNotifier<ConsentState> {
   final ApiClient _api;
 
   void toggle({
-    bool? emailReminders, bool? therapistEscalation,
-    bool? rehabEscalation, bool? dataAnalytics,
+    bool? emailReminders,
+    bool? therapistEscalation,
+    bool? rehabEscalation,
+    bool? dataAnalytics,
   }) {
     state = state.copyWith(
-      emailReminders:      emailReminders,
+      emailReminders: emailReminders,
       therapistEscalation: therapistEscalation,
-      rehabEscalation:     rehabEscalation,
-      dataAnalytics:       dataAnalytics,
-      saved:               false,
+      rehabEscalation: rehabEscalation,
+      dataAnalytics: dataAnalytics,
+      saved: false,
     );
   }
 
@@ -348,10 +410,10 @@ class ConsentNotifier extends StateNotifier<ConsentState> {
     state = state.copyWith(isSaving: true, error: null, saved: false);
     try {
       await _api.post('/consent', data: {
-        'email_reminders':      state.emailReminders,
+        'email_reminders': state.emailReminders,
         'therapist_escalation': state.therapistEscalation,
-        'rehab_escalation':     state.rehabEscalation,
-        'data_analytics':       state.dataAnalytics,
+        'rehab_escalation': state.rehabEscalation,
+        'data_analytics': state.dataAnalytics,
       });
       state = state.copyWith(isSaving: false, saved: true);
       return true;
@@ -369,8 +431,8 @@ class ConsentNotifier extends StateNotifier<ConsentState> {
     state = state.copyWith(isSaving: true, error: null);
     try {
       await _api.post('/user/therapist-consent', data: {
-        'therapist_email':        therapistEmail,
-        'consent_given':          consentGiven,
+        'therapist_email': therapistEmail,
+        'consent_given': consentGiven,
         'journal_access_consent': journalAccess,
       });
       state = state.copyWith(isSaving: false, saved: true);
@@ -385,3 +447,23 @@ class ConsentNotifier extends StateNotifier<ConsentState> {
 final consentProvider = StateNotifierProvider<ConsentNotifier, ConsentState>(
   (ref) => ConsentNotifier(ref.read(apiProvider)),
 );
+
+// ── Therapist providers ───────────────────────────────────────────────────────
+
+final therapistPatientsProvider = FutureProvider<List<TherapistPatient>>((ref) async {
+  final res = await ref.read(apiProvider).get('/therapist/patients');
+  final data = res.data as Map<String, dynamic>;
+  return (data['patients'] as List)
+      .map((p) => TherapistPatient.fromJson(p as Map<String, dynamic>))
+      .toList();
+});
+
+final patientInsightsProvider =
+    FutureProvider.family<List<PatientInsight>, String>((ref, patientId) async {
+  final res = await ref.read(apiProvider)
+      .get('/therapist/patients/$patientId/insights');
+  final data = res.data as Map<String, dynamic>;
+  return (data['insights'] as List)
+      .map((i) => PatientInsight.fromJson(i as Map<String, dynamic>))
+      .toList();
+});

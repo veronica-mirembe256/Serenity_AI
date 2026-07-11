@@ -16,7 +16,8 @@ class _State extends ConsumerState<InsightsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final insights = ref.watch(insightsProvider);
+    // Use a refreshable provider - this will auto-refresh when invalidated
+    final insightsAsync = ref.watch(insightsProvider);
     final t = Theme.of(context).textTheme;
 
     return SizedBox.expand(
@@ -29,10 +30,24 @@ class _State extends ConsumerState<InsightsPage> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
-                child: Text('All Insights', style: t.headlineSmall),
+                child: Row(
+                  children: [
+                    Text('All Insights', style: t.headlineSmall),
+                    const Spacer(),
+                    // Add a refresh button
+                    IconButton(
+                      icon: const Icon(Icons.refresh_rounded, size: 20),
+                      onPressed: () {
+                        print('🔄 [INSIGHTS] Manual refresh triggered');
+                        ref.invalidate(insightsProvider);
+                      },
+                      tooltip: 'Refresh insights',
+                    ),
+                  ],
+                ),
               ),
               const Divider(height: 1),
-              Expanded(child: insights.when(
+              Expanded(child: insightsAsync.when(
                 loading: () => ListView.builder(
                   padding: const EdgeInsets.all(14),
                   itemCount: 5,
@@ -40,22 +55,47 @@ class _State extends ConsumerState<InsightsPage> {
                     padding: const EdgeInsets.only(bottom: 10),
                     child: WShimmer(h: 64)),
                 ),
-                error: (_, __) => Center(child: Text('Failed to load.', style: t.bodyMedium)),
-                data: (list) => list.isEmpty
-                    ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                        const Text('🌱', style: TextStyle(fontSize: 32)),
-                        const SizedBox(height: 10),
-                        Text('No insights yet.', style: t.bodyMedium?.copyWith(color: AppColors.inkMid)),
-                      ]))
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                        itemCount: list.length,
-                        itemBuilder: (ctx, i) => _ListTile(
-                          item: list[i],
-                          selected: _sel?.id == list[i].id,
-                          onTap: () => setState(() => _sel = list[i]),
+                error: (err, stack) {
+                  print('❌ [INSIGHTS] Error: $err');
+                  return Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('Failed to load insights.', style: t.bodyMedium),
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: () {
+                            print('🔄 [INSIGHTS] Retry fetch');
+                            ref.invalidate(insightsProvider);
+                          },
+                          child: const Text('Retry'),
                         ),
-                      ),
+                      ],
+                    ),
+                  );
+                },
+                data: (list) {
+                  print('📊 [INSIGHTS] Displaying ${list.length} insights');
+                  if (list.isEmpty) {
+                    return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Text('🌱', style: TextStyle(fontSize: 32)),
+                      const SizedBox(height: 10),
+                      Text('No insights yet.', style: t.bodyMedium?.copyWith(color: AppColors.inkMid)),
+                      const SizedBox(height: 8),
+                      Text('Write a journal entry to get insights.',
+                          style: t.bodySmall?.copyWith(color: AppColors.inkLt)),
+                    ]));
+                  }
+                  return ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    itemCount: list.length,
+                    itemBuilder: (ctx, i) => _ListTile(
+                      item: list[i],
+                      selected: _sel?.id == list[i].id,
+                      onTap: () => setState(() => _sel = list[i]),
+                    ),
+                  );
+                },
               )),
             ]),
           ),

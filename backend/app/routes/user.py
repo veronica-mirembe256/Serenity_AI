@@ -57,7 +57,11 @@ async def emergency_alert(
     background_tasks: BackgroundTasks,              # FIX 2.8: BackgroundTask
     user_id: str = Depends(get_current_user),
 ):
-    supabase = get_supabase()
+    # FIX (critical): anon client's SELECT was silently blocked by RLS,
+    # so profile always came back empty and users with a real emergency
+    # contact configured were incorrectly told to set one up — meaning the
+    # crisis alert never actually sent.
+    supabase = get_supabase(service_role=True)
     try:
         res = (
             supabase.table("user_profiles")
